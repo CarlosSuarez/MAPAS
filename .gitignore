@@ -1,0 +1,35 @@
+# Entornos locales
+.venv/
+venv/
+env/
+pip-wheel-metadata/
+
+# Cachés Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# SO / editores
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Logs / artefactos
+*.log
+logs/
+outputs/
+
+# Datos: ignora todo en data/ excepto el CSV que usa la app
+data/*
+!data/datos_final7_pca_components.csv
+
+# Si el CSV está en la raíz, descomenta la siguiente línea para NO ignorarlo:
+# !datos_final7_pca_components.csv
