@@ -18,6 +18,11 @@ from sklearn.metrics import classification_report, confusion_matrix, accuracy_sc
 
 import lightgbm as lgb
 
+# ================== CONFIGURACIÓN MATPLOTLIB ==================
+# Configurar matplotlib para cerrar figuras automáticamente
+plt.rcParams['figure.max_open_warning'] = 0  # Deshabilitar warning
+plt.ioff()  # Desactivar modo interactivo
+
 # ================== Config general & estilo ==================
 st.set_page_config(page_title="Fenotipos Hemodinámicos (PCA)", page_icon="🧬", layout="wide")
 st.title("🧬 Fenotipos Hemodinámicos con PCA: Clustering y Clasificación")
@@ -75,7 +80,6 @@ if df is None:
     st.stop()
 
 st.success(f"✅ Datos cargados. {used_source_desc}")
-
 
 # ======== Detección de columnas PCA y elección de PCs a usar ========
 def detectar_pc_cols(_df: pd.DataFrame):
@@ -136,7 +140,54 @@ LOADINGS_DEFAULT = pd.DataFrame(
     ],
 )
 
+# ================== FUNCIÓN AUXILIAR PARA CERRAR FIGURAS ==================
+def plot_and_show(fig):
+    """Función auxiliar para mostrar y cerrar figuras de matplotlib"""
+    st.pyplot(fig)
+    plt.close(fig)
 
+# ================== CACHEAR CLUSTERING ==================
+@st.cache_data(show_spinner=False)
+def perform_clustering(X_data, k_clusters, random_seed=42):
+    """Función cacheada para el clustering"""
+    kmeans = KMeans(n_clusters=k_clusters, random_state=random_seed, n_init=50)
+    labels = kmeans.fit_predict(X_data)
+    return labels, kmeans
+
+@st.cache_data(show_spinner=False)
+def calculate_inertia_and_accuracy(X_all_data, X_selected_data, k_ref, k_range_tuple):
+    """Función cacheada para calcular inercia y accuracy"""
+    k_range = list(range(*k_range_tuple))
+    
+    # Cálculo de inercia
+    inertia = []
+    for k in k_range:
+        km = KMeans(n_clusters=k, random_state=42, n_init=10)
+        km.fit(X_all_data)
+        inertia.append(km.inertia_)
+
+    # Cálculo de accuracy
+    kmeans_ref = KMeans(n_clusters=int(k_ref), n_init=10, random_state=42)
+    y_true = kmeans_ref.fit_predict(X_selected_data)
+
+    acc_list = []
+    for k in k_range:
+        km = KMeans(n_clusters=k, n_init=10, random_state=42)
+        y_pred = km.fit_predict(X_selected_data)
+
+        # Mapear etiquetas de y_pred a y_true (por mayor frecuencia)
+        labels_mapped = np.zeros_like(y_pred)
+        for i in range(k):
+            mask = (y_pred == i)
+            if np.any(mask):
+                # etiqueta "verdadera" más frecuente dentro de ese cluster
+                majority = np.bincount(y_true[mask]).argmax()
+                labels_mapped[mask] = majority
+
+        acc = (labels_mapped == y_true).mean()
+        acc_list.append(acc)
+    
+    return k_range, inertia, acc_list
 
 # ================== Tabs  ==================
 tabA, tab0, tab1, tab2, tab3, tab4, tab5 = st.tabs([
@@ -159,7 +210,7 @@ with tabA:
     )
     ax.set_xlabel("Variables originales"); ax.set_ylabel("Componentes principales")
     ax.set_title("PCA Loadings Heatmap")
-    st.pyplot(fig)
+    plot_and_show(fig)
     st.caption("Los *loadings* indican la contribución (y signo) de cada variable original a cada componente principal.")
 
     st.markdown("""
@@ -201,7 +252,6 @@ with tab0:
     st.caption(f"PCs seleccionados para el flujo: {pcs_to_use}")
     st.dataframe(df_pca.head(50), use_container_width=True)
 
-
     st.markdown("""
 ###  Definición del Problema y Descubrimiento de Fenotipos con Clustering
 **Objetivo:** Nuestro primer paso es descubrir estos grupos latentes en los datos. Usaremos K-Means para agrupar a los pacientes y cada cluster será considerado un "fenotipo hemodinámico". El resultado de este paso será nuestro DataFrame con una nueva columna fenotipo que usaremos como variable objetivo. 
@@ -212,63 +262,34 @@ with tab1:
     st.subheader("📊 Diagnóstico: Codo e 'Accuracy' de K-Means")
 
     # --- Parámetro para la "verdad" de referencia (ground truth) ---
-    # Usamos por defecto el mismo k que elegiste en el sidebar (k_optimo),
-    # pero puedes cambiarlo aquí para comparar.
     k_ref = st.number_input(
         "k de referencia (ground truth para accuracy)",
         min_value=2, max_value=20, value=int(k_optimo), step=1,
         help="Se usa para generar y_true con KMeans(k_ref) y calcular el 'accuracy' relativo."
     )
 
-    # --- 1) Cálculo de inercia (codo) y accuracy para k=2..20 ---
-    k_range = range(2, 21)
-
-    # Codo: lo calculamos con TODOS los PCs detectados (X_pca_all)
-    inertia = []
-    for k in k_range:
-        km = KMeans(n_clusters=k, random_state=random_state, n_init=10)
-        km.fit(X_pca_all)
-        inertia.append(km.inertia_)
-
-    # Accuracy: lo calculamos en el espacio seleccionado (X_pca)
-    # y_true proviene del clustering con k_ref
-    kmeans_ref = KMeans(n_clusters=int(k_ref), n_init=10, random_state=random_state)
-    y_true = kmeans_ref.fit_predict(X_pca)
-
-    acc_list = []
-    for k in k_range:
-        km = KMeans(n_clusters=k, n_init=10, random_state=random_state)
-        y_pred = km.fit_predict(X_pca)
-
-        # Mapear etiquetas de y_pred a y_true (por mayor frecuencia) sin usar scipy
-        labels_mapped = np.zeros_like(y_pred)
-        for i in range(k):
-            mask = (y_pred == i)
-            if np.any(mask):
-                # etiqueta "verdadera" más frecuente dentro de ese cluster
-                majority = np.bincount(y_true[mask]).argmax()
-                labels_mapped[mask] = majority
-
-        acc = (labels_mapped == y_true).mean()
-        acc_list.append(acc)
+    # --- 1) Cálculo de inercia (codo) y accuracy para k=2..20 (CACHEADO) ---
+    k_range, inertia, acc_list = calculate_inertia_and_accuracy(
+        X_pca_all, X_pca, k_ref, (2, 21)
+    )
 
     # --- 2) Mostrar las dos gráficas al mismo nivel ---
     col1, col2 = st.columns(2, gap="large")
 
     with col1:
         fig1, ax1 = plt.subplots(figsize=(6, 3.5))
-        ax1.plot(list(k_range), inertia, marker="o", linestyle="--")
+        ax1.plot(k_range, inertia, marker="o", linestyle="--")
         ax1.axvline(x=int(k_optimo), color="red", linestyle="--", label=f"k elegido = {int(k_optimo)}")
         ax1.set_title("Método del Codo (Inercia)")
         ax1.set_xlabel("Número de Clusters (k)")
         ax1.set_ylabel("Inercia")
         ax1.grid(True, alpha=.3)
         ax1.legend()
-        st.pyplot(fig1)
+        plot_and_show(fig1)
 
     with col2:
         fig2, ax2 = plt.subplots(figsize=(6, 3.5))
-        ax2.plot(list(k_range), acc_list, marker="o", linestyle="--", color="purple")
+        ax2.plot(k_range, acc_list, marker="o", linestyle="--", color="purple")
         ax2.axvline(x=int(k_ref), color="red", linestyle="--", label=f"k de referencia = {int(k_ref)}")
         ax2.set_title("K-Means Accuracy (vs. k de referencia)")
         ax2.set_xlabel("Número de Clusters (k)")
@@ -276,11 +297,11 @@ with tab1:
         ax2.set_ylim(0, 1.05)
         ax2.grid(True, alpha=.3)
         ax2.legend()
-        st.pyplot(fig2)
+        plot_and_show(fig2)
 
-    # --- 3) Clustering final con el k seleccionado en el sidebar (k_optimo) ---
-    kmeans_final = KMeans(n_clusters=int(k_optimo), random_state=random_state, n_init=50)
-    df_pca["fenotipo"] = kmeans_final.fit_predict(X_pca)
+    # --- 3) Clustering final con el k seleccionado (CACHEADO) ---
+    fenotipo_labels, kmeans_final = perform_clustering(X_pca, int(k_optimo), random_state)
+    df_pca["fenotipo"] = fenotipo_labels
 
     dist_df = (
         df_pca["fenotipo"]
@@ -302,20 +323,15 @@ with tab1:
   → Fenotipos Minoritarios: Los grupos 0 (3731) y 2 (3467) son menos frecuentes, constituyendo el 32% restante.
     """)
 
-    
-
 # ============ TAB 2: Exploración en PCA ============
 with tab2:
-
     st.markdown("""
 **Objetivo:** Ahora que tenemos la variable fenotipo, exploraremos cómo se relacionan las características fisiológicas con cada grupo. Veremos si los grupos son distintos y qué variables los definen.
-
     """)
-
 
     st.subheader("🔎 Exploración en el espacio PCA")
 
-    # 1) Scatter PC1 vs PC2 por fenotipo (útil, lo mantenemos)
+    # 1) Scatter PC1 vs PC2 por fenotipo
     pcs = detectar_pc_cols(df_pca)
     PC1 = next((c for c in pcs if c.upper()=="PC1"), pcs[0])
     PC2 = next((c for c in pcs if c.upper()=="PC2"), pcs[1] if len(pcs)>1 else pcs[0])
@@ -323,11 +339,10 @@ with tab2:
     fig, ax = plt.subplots(figsize=(7, 4.8))
     sns.scatterplot(data=df_pca, x=PC1, y=PC2, hue="fenotipo", palette="viridis", s=18, alpha=0.8, ax=ax)
     ax.set_title("Fenotipos en PC1 vs PC2"); ax.grid(True, alpha=.3)
-    st.pyplot(fig)
+    plot_and_show(fig)
 
-    # 2) “Comportamiento de Fenotipos en el Espacio PCA” (pairplot del código original)
+    # 2) "Comportamiento de Fenotipos en el Espacio PCA" (pairplot)
     st.markdown("**Comportamiento de Fenotipos en el Espacio PCA (pairplot)**")
-    # Para evitar plots muy pesados, muestreamos hasta N filas
     max_pts = st.slider("Máx. puntos para pairplot (para rendimiento)", 500, 5000, 2000, 500)
     df_pair = df_pca.copy()
     if len(df_pair) > max_pts:
@@ -346,8 +361,7 @@ with tab2:
         diag_kws=dict(fill=True, alpha=0.7),
     )
     pair.fig.suptitle('Comportamiento de Fenotipos en el Espacio PCA', y=1.02)
-    st.pyplot(pair.fig)
-
+    plot_and_show(pair.fig)
 
     st.markdown("""
 ### Interpretación Clínica de la Prevalencia
@@ -376,13 +390,17 @@ with tab2:
   → Perfil Numérico: PC1 Alto (+1.80), PC2 Muy Bajo (-1.81).
 
   → Interpretación Clínica: Este es un perfil muy específico y de gran interés clínico. Se caracteriza por una presión sistólica y de pulso muy alta (PC1 alto) pero con una presión diastólica y frecuencia cardíaca notablemente bajas (PC2 muy bajo). Esta gran diferencia entre la presión sistólica y la diastólica (pulso amplio) es un indicador clásico de rigidez arterial.
-
-
     """)
 
 # ============ TAB 3: Modelado (sobre PCs) ============
 with tab3:
     st.subheader("🤖 Modelado supervisado usando PCs seleccionados")
+    
+    # Verificar que tenemos la columna fenotipo
+    if "fenotipo" not in df_pca.columns:
+        st.warning("Primero ejecuta el clustering en la pestaña 'Diagnóstico & Clustering'")
+        st.stop()
+    
     X = df_pca[pcs_to_use]
     y = df_pca["fenotipo"]
 
@@ -397,13 +415,17 @@ with tab3:
         "DecisionTree": (DecisionTreeClassifier(random_state=42), {'max_depth': [5, 10, None]}),
         "RandomForest": (RandomForestClassifier(random_state=42), {'n_estimators': [100, 200]}),
         "GradientBoosting": (GradientBoostingClassifier(random_state=42), {'n_estimators': [100]}),
-        "LightGBM": (lgb.LGBMClassifier(random_state=42), {'n_estimators': [100]}),
-        "GaussianNB": (GaussianNB(), {}),  # sin hiperparámetros
+        "LightGBM": (lgb.LGBMClassifier(random_state=42, verbose=-1), {'n_estimators': [100]}),
+        "GaussianNB": (GaussianNB(), {}),
     }
 
     best_models = {}
     rows = []
-    for name, (model, params) in classifiers.items():
+    
+    progress_bar = st.progress(0)
+    total_models = len(classifiers)
+    
+    for i, (name, (model, params)) in enumerate(classifiers.items()):
         with st.spinner(f"Entrenando {name}..."):
             grid = GridSearchCV(model, params, cv=3, scoring="f1_macro", n_jobs=-1)
             grid.fit(X_train, y_train)
@@ -413,6 +435,7 @@ with tab3:
                 "F1 (CV)": grid.best_score_,
                 "Mejores parámetros": str(grid.best_params_)
             })
+            progress_bar.progress((i + 1) / total_models)
 
     results_cv_df = pd.DataFrame(rows).sort_values("F1 (CV)", ascending=False).reset_index(drop=True)
     st.markdown("**Resultados (validación cruzada)**")
@@ -443,15 +466,27 @@ with tab4:
 
         st.markdown("---")
         st.markdown("**Matrices de confusión**")
-        for name, model in best_models.items():
-            y_pred = model.predict(X_test)
-            cm = confusion_matrix(y_test, y_pred)
-            fig, ax = plt.subplots(figsize=(4.8, 3.8))
-            sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", ax=ax)
-            ax.set_title(f"{name}")
-            ax.set_xlabel("Predicho"); ax.set_ylabel("Real")
-            st.pyplot(fig)
-
+        
+        # Crear matrices de confusión en una cuadrícula
+        n_models = len(best_models)
+        cols_per_row = 3
+        n_rows = (n_models + cols_per_row - 1) // cols_per_row
+        
+        model_items = list(best_models.items())
+        for row in range(n_rows):
+            cols = st.columns(cols_per_row)
+            for col_idx in range(cols_per_row):
+                model_idx = row * cols_per_row + col_idx
+                if model_idx < len(model_items):
+                    name, model = model_items[model_idx]
+                    with cols[col_idx]:
+                        y_pred = model.predict(X_test)
+                        cm = confusion_matrix(y_test, y_pred)
+                        fig, ax = plt.subplots(figsize=(4.8, 3.8))
+                        sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", ax=ax)
+                        ax.set_title(f"{name}")
+                        ax.set_xlabel("Predicho"); ax.set_ylabel("Real")
+                        plot_and_show(fig)
 
     st.markdown("""
 
