@@ -41,7 +41,7 @@ st.sidebar.header("⚙️ Datos & Parámetros")
 
 DATA_SOURCE = st.sidebar.radio(
     "Fuente de datos (componentes PCA)",
-    ["Auto (archivo local)", "URL (GitHub/raw)", "Subir CSV"],
+    ["Auto (archivo local)", "Subir CSV"],
     index=0,
 )
 DEFAULT_PATHS = [Path("datos_final7_pca_components.csv"), Path("data/datos_final7_pca_components.csv")]
@@ -49,10 +49,6 @@ DEFAULT_PATHS = [Path("datos_final7_pca_components.csv"), Path("data/datos_final
 @st.cache_data(show_spinner=False)
 def load_csv_from_path(p: Path) -> pd.DataFrame:
     return pd.read_csv(p)
-
-@st.cache_data(show_spinner=False)
-def load_csv_from_url(url: str) -> pd.DataFrame:
-    return pd.read_csv(url)
 
 @st.cache_data(show_spinner=False)
 def load_csv_from_upload(file) -> pd.DataFrame:
@@ -68,20 +64,8 @@ if DATA_SOURCE == "Auto (archivo local)":
         used_source_desc = f"📁 Cargado automáticamente desde `{found}`"
     else:
         st.warning("No se encontró `datos_final7_pca_components.csv` (ni en `./` ni en `./data/`). "
-                   "Selecciona **URL** o **Subir CSV** en la barra lateral.")
-elif DATA_SOURCE == "URL (GitHub/raw)":
-    url_input = st.sidebar.text_input(
-        "URL directa al CSV (raw de GitHub u otro servidor)",
-        value="",
-        placeholder="https://raw.githubusercontent.com/usuario/repo/rama/data/datos_final7_pca_components.csv",
-    )
-    if url_input:
-        try:
-            df = load_csv_from_url(url_input)
-            used_source_desc = "🔗 Cargado desde URL"
-        except Exception as e:
-            st.error(f"No se pudo leer la URL. Detalle: {e}")
-else:
+                   "Selecciona **Subir CSV** en la barra lateral.")
+else:  # Subir CSV
     uploaded_file = st.sidebar.file_uploader("Sube tu CSV (componentes PCA)", type=["csv"])
     if uploaded_file:
         df = load_csv_from_upload(uploaded_file)
@@ -91,6 +75,7 @@ if df is None:
     st.stop()
 
 st.success(f"✅ Datos cargados. {used_source_desc}")
+
 
 # ======== Detección de columnas PCA y elección de PCs a usar ========
 def detectar_pc_cols(_df: pd.DataFrame):
@@ -151,21 +136,9 @@ LOADINGS_DEFAULT = pd.DataFrame(
     ],
 )
 
-# (Opcional) permitir cargar un CSV de loadings para sustituir el default
-with st.expander("🧩 (Opcional) Cargar CSV de loadings para el heatmap", expanded=False):
-    up_load = st.file_uploader("CSV con matriz de loadings (filas=PCs, columnas=variables)", type=["csv"], key="up_loadings")
-    if up_load is not None:
-        try:
-            tmp = pd.read_csv(up_load, index_col=0)
-            if tmp.shape[0] >= 2 and tmp.shape[1] >= 2:
-                LOADINGS_DEFAULT = tmp
-                st.success("Loadings cargados desde tu archivo.")
-            else:
-                st.error("El CSV debe tener al menos 2 filas (PCs) y 2 columnas (variables).")
-        except Exception as e:
-            st.error(f"No se pudo leer el CSV de loadings: {e}")
 
-# ================== Tabs (orden solicitado) ==================
+
+# ================== Tabs  ==================
 tabA, tab0, tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "🧩 Caracterización PC",
     "👀 Datos",
@@ -192,21 +165,31 @@ with tabA:
     st.markdown("""
 ### Caracterización de los componentes principales (PC1–PC5)
 
-- **PC1 — Presión de Pulso y Sistólica (PP/SBP ↑):** cargas positivas altas en *pulse_pressure_mean*, *pulse_pressure_night_mean*, *sbp_mean*, *sbp_night_mean*.  
-  → Valores altos = hipertensión **sistólica** y **pulso** elevados.
+- **PC1 (Componente de "Presión de Pulso y Sistólica"):**  
+  → Contribución alta y positiva: pulse_pressure_mean, pulse_pressure_night_mean, sbp_mean, sbp_night_mean. Significado: Sigue siendo el componente principal de la hipertensión sistólica y de pulso elevado. Un valor alto aquí indica presiones "altas" muy fuertes.
 
-- **PC2 — Presión Diastólica y Frecuencia Cardíaca (DBP/FC ↑):** cargas positivas altas en *dbp_mean*, *dbp_night_mean*, *fc_mean*, *fc_night_mean*.  
-  → Valores altos = **diastólica** y **frecuencia** elevadas (taquicardia).
+- **PC2 (Componente de "Presión Diastólica y Frecuencia Cardíaca"):**  
+  → Contribución alta y positiva: dbp_mean, dbp_night_mean, fc_mean, fc_night_mean. Significado: Ahora representa de forma más clara la hipertensión diastólica y la taquicardia. Un valor alto en PC2 significa DBP y FC elevadas.
 
-- **PC3 — Frecuencia vs. Pulso (contraste FC ↑ ↔ PP ↓):** positivo en FC; negativo en PP.  
-  → Altos PC3 = **FC alta** con **PP baja**; bajos PC3 = **PP alta** con **FC controlada**.
+- **PC3 (Componente de "Frecuencia Cardíaca vs. Presión de Pulso"):**
+  → Contribución alta y positiva: fc_mean y fc_night_mean (Frecuencia Cardíaca).
 
-- **PC4 — Patrón Nocturno Anormal (No Dipper):** positivo en presiones nocturnas y negativo en diurnas.  
-  → Altos PC4 = patrón **Non-Dipper/Riser** (mayor presión nocturna).
+  → Contribución negativa: pulse_pressure_mean y pulse_pressure_night_mean (Presión de Pulso). Significado Clínico: Este componente representa un contraste o una relación inversa. Un valor alto y positivo en PC3 describe a pacientes que tienen una frecuencia cardíaca elevada pero, al mismo tiempo, una presión de pulso relativamente baja. Un valor bajo y negativo en PC3 describiría el perfil opuesto: una presión de pulso alta con una frecuencia cardíaca más controlada.
 
-- **PC5 — Patrón de Pulso Diurno (Dipper fuerte):** positivo en PP/SBP diurnas y negativo en nocturnas.  
-  → Altos PC5 = **Dipper** pronunciado (descenso nocturno saludable).
-""")
+- **PC4 (Componente de "Patrón Nocturno Anormal - No Dipper"):**  
+  → Contribución alta y positiva: dbp_night_mean y sbp_night_mean (Presiones Nocturnas).
+
+  → Contribución alta y negativa: dbp_mean y sbp_mean (Presiones Diurnas). Significado Clínico: Este es un componente muy importante en el análisis de MAPA. Representa el patrón circadiano de la presión arterial. Un valor alto y positivo en PC4 identifica claramente a los pacientes con un patrón "Non-Dipper" (o "Riser"). Es decir, su presión arterial es más alta durante la noche que durante el día, lo cual es un indicador de mayor riesgo cardiovascular.
+
+- **PC5 (Componente de "Patrón de Pulso Diurno - Dipper Fuerte"):** 
+  → Contribución alta y positiva: pulse_pressure_mean y sbp_mean (Presión de Pulso y Sistólica Diurnas).
+
+  → Contribución alta y negativa: pulse_pressure_night_mean y sbp_night_mean (Presión de Pulso y Sistólica Nocturnas). Significado Clínico: Este componente es el opuesto al PC4, pero enfocado en la presión de pulso y sistólica. Un valor alto y positivo en PC5 describe a los pacientes con un patrón "Dipper" muy marcado. Tienen una presión de pulso y sistólica diurna significativamente más alta que la nocturna, lo que indica un descenso nocturno saludable y pronunciado.
+
+
+Mientras que PC1 y PC2 dan la severidad y el tipo general de hipertensión (Sistólica vs. Diastólica/FC), los componentes PC3, PC4 y PC5 permiten añadir una capa de detalle clínico mucho más rica, describiendo las relaciones entre variables (FC vs. Pulso) y los patrones circadianos (Dipper vs. Non-Dipper), que son fundamentales en el diagnóstico y pronóstico de la hipertensión.
+
+    """)
 
 # ============ TAB 0: Datos ============
 with tab0:
@@ -218,33 +201,118 @@ with tab0:
     st.caption(f"PCs seleccionados para el flujo: {pcs_to_use}")
     st.dataframe(df_pca.head(50), use_container_width=True)
 
+
+    st.markdown("""
+###  Definición del Problema y Descubrimiento de Fenotipos con Clustering
+**Objetivo:** Nuestro primer paso es descubrir estos grupos latentes en los datos. Usaremos K-Means para agrupar a los pacientes y cada cluster será considerado un "fenotipo hemodinámico". El resultado de este paso será nuestro DataFrame con una nueva columna fenotipo que usaremos como variable objetivo. 
+    """)
+
 # ============ TAB 1: Diagnóstico & Clustering ============
 with tab1:
-    st.subheader("📊 Método del Codo (en espacio PCA)")
+    st.subheader("📊 Diagnóstico: Codo e 'Accuracy' de K-Means")
+
+    # --- Parámetro para la "verdad" de referencia (ground truth) ---
+    # Usamos por defecto el mismo k que elegiste en el sidebar (k_optimo),
+    # pero puedes cambiarlo aquí para comparar.
+    k_ref = st.number_input(
+        "k de referencia (ground truth para accuracy)",
+        min_value=2, max_value=20, value=int(k_optimo), step=1,
+        help="Se usa para generar y_true con KMeans(k_ref) y calcular el 'accuracy' relativo."
+    )
+
+    # --- 1) Cálculo de inercia (codo) y accuracy para k=2..20 ---
+    k_range = range(2, 21)
+
+    # Codo: lo calculamos con TODOS los PCs detectados (X_pca_all)
     inertia = []
-    k_values = range(2, 11)
-    for k in k_values:
+    for k in k_range:
         km = KMeans(n_clusters=k, random_state=random_state, n_init=10)
-        km.fit(X_pca_all)  # codo con TODOS los PCs detectados
+        km.fit(X_pca_all)
         inertia.append(km.inertia_)
 
-    fig, ax = plt.subplots(figsize=(6, 3.5))
-    ax.plot(list(k_values), inertia, marker="o")
-    ax.set_xlabel("Número de Clusters (k)"); ax.set_ylabel("Inercia"); ax.grid(True, alpha=.3)
-    st.pyplot(fig)
+    # Accuracy: lo calculamos en el espacio seleccionado (X_pca)
+    # y_true proviene del clustering con k_ref
+    kmeans_ref = KMeans(n_clusters=int(k_ref), n_init=10, random_state=random_state)
+    y_true = kmeans_ref.fit_predict(X_pca)
 
-    # Clustering final con PCs seleccionados
-    kmeans_final = KMeans(n_clusters=k_optimo, random_state=random_state, n_init=50)
+    acc_list = []
+    for k in k_range:
+        km = KMeans(n_clusters=k, n_init=10, random_state=random_state)
+        y_pred = km.fit_predict(X_pca)
+
+        # Mapear etiquetas de y_pred a y_true (por mayor frecuencia) sin usar scipy
+        labels_mapped = np.zeros_like(y_pred)
+        for i in range(k):
+            mask = (y_pred == i)
+            if np.any(mask):
+                # etiqueta "verdadera" más frecuente dentro de ese cluster
+                majority = np.bincount(y_true[mask]).argmax()
+                labels_mapped[mask] = majority
+
+        acc = (labels_mapped == y_true).mean()
+        acc_list.append(acc)
+
+    # --- 2) Mostrar las dos gráficas al mismo nivel ---
+    col1, col2 = st.columns(2, gap="large")
+
+    with col1:
+        fig1, ax1 = plt.subplots(figsize=(6, 3.5))
+        ax1.plot(list(k_range), inertia, marker="o", linestyle="--")
+        ax1.axvline(x=int(k_optimo), color="red", linestyle="--", label=f"k elegido = {int(k_optimo)}")
+        ax1.set_title("Método del Codo (Inercia)")
+        ax1.set_xlabel("Número de Clusters (k)")
+        ax1.set_ylabel("Inercia")
+        ax1.grid(True, alpha=.3)
+        ax1.legend()
+        st.pyplot(fig1)
+
+    with col2:
+        fig2, ax2 = plt.subplots(figsize=(6, 3.5))
+        ax2.plot(list(k_range), acc_list, marker="o", linestyle="--", color="purple")
+        ax2.axvline(x=int(k_ref), color="red", linestyle="--", label=f"k de referencia = {int(k_ref)}")
+        ax2.set_title("K-Means Accuracy (vs. k de referencia)")
+        ax2.set_xlabel("Número de Clusters (k)")
+        ax2.set_ylabel("Accuracy")
+        ax2.set_ylim(0, 1.05)
+        ax2.grid(True, alpha=.3)
+        ax2.legend()
+        st.pyplot(fig2)
+
+    # --- 3) Clustering final con el k seleccionado en el sidebar (k_optimo) ---
+    kmeans_final = KMeans(n_clusters=int(k_optimo), random_state=random_state, n_init=50)
     df_pca["fenotipo"] = kmeans_final.fit_predict(X_pca)
 
-    dist_df = df_pca["fenotipo"].value_counts().rename_axis("fenotipo").reset_index(name="count")
-    st.success(f"✅ Se han descubierto {k_optimo} fenotipos")
-    st.dataframe(dist_df.sort_values("fenotipo").reset_index(drop=True), use_container_width=True)
+    dist_df = (
+        df_pca["fenotipo"]
+        .value_counts()
+        .rename_axis("fenotipo")
+        .reset_index(name="count")
+        .sort_values("fenotipo")
+        .reset_index(drop=True)
+    )
 
-    # (Se retiró la gráfica de “Fenotipos mapeados” como solicitaste)
+    st.success(f"✅ Se han descubierto {int(k_optimo)} fenotipos")
+    st.dataframe(dist_df, use_container_width=True)
+
+    st.markdown("""
+**Análisis de la Distribución La observación principal es que los cuatro grupos no tienen el mismo tamaño, lo cual es un hallazgo muy realista y significativo.**
+
+  → Fenotipos Dominantes: Los grupos 1 (8433) y 3 (6682) son los más comunes, representando juntos aproximadamente el 68% de todos los pacientes.
+
+  → Fenotipos Minoritarios: Los grupos 0 (3731) y 2 (3467) son menos frecuentes, constituyendo el 32% restante.
+    """)
+
+    
 
 # ============ TAB 2: Exploración en PCA ============
 with tab2:
+
+    st.markdown("""
+**Objetivo:** Ahora que tenemos la variable fenotipo, exploraremos cómo se relacionan las características fisiológicas con cada grupo. Veremos si los grupos son distintos y qué variables los definen.
+
+    """)
+
+
     st.subheader("🔎 Exploración en el espacio PCA")
 
     # 1) Scatter PC1 vs PC2 por fenotipo (útil, lo mantenemos)
@@ -279,6 +347,38 @@ with tab2:
     )
     pair.fig.suptitle('Comportamiento de Fenotipos en el Espacio PCA', y=1.02)
     st.pyplot(pair.fig)
+
+
+    st.markdown("""
+### Interpretación Clínica de la Prevalencia
+
+** Fenotipo 1 (El más común: 37.8%): Hipertensión Leve o Basal **
+
+  → Perfil Numérico: PC1 Negativo (-0.94), PC2 Negativo (-0.73).
+
+  → Interpretación Clínica: Este grupo, que es el más grande de la muestra, tiene valores consistentemente bajos en los componentes que miden la severidad de la presión (tanto sistólica como diastólica). Representa el perfil hemodinámico más cercano a la normalidad dentro de la población de hipertensos, correspondiendo a casos de hipertensión leve o pacientes cuya condición está bien controlada.
+
+** Fenotipo 3 (El segundo más común: 29.9%): Hipertensión Diastólica y taquicardia **
+
+  → Perfil Numérico: PC1 Negativo (-1.08), PC2 Alto (+1.11).
+
+  → Interpretación Clínica: El problema principal para este grupo no es la presión sistólica 
+(que es relativamente baja en comparación con los otros). Su perfil se define por una presión diastólica y una frecuencia cardíaca elevadas (PC2 alto). Representa un tipo de hipertensión donde el sistema cardiovascular parece estar en un estado de "sobreactivación" constante.
+
+** Fenotipo 0 (Menos común: 16.7%): Hipertensión Sistólica-Diastólica **
+
+  → Perfil Numérico: PC1 Muy Alto (+2.42), PC2 Alto (+1.34).
+
+  → Interpretación Clínica: Este grupo representa el perfil de hipertensión más severo en todas las métricas. El valor extremadamente alto en PC1 indica presiones sistólicas y de pulso muy elevadas, mientras que el valor alto en PC2 se traduce en presiones diastólicas y frecuencias cardíacas también altas. Es un fenotipo de "carga hemodinámica total".
+
+** Fenotipo 2 (El menos común: 15.5%): Hipertensión Sistólica Aislada con Bradicardia Relativa **
+
+  → Perfil Numérico: PC1 Alto (+1.80), PC2 Muy Bajo (-1.81).
+
+  → Interpretación Clínica: Este es un perfil muy específico y de gran interés clínico. Se caracteriza por una presión sistólica y de pulso muy alta (PC1 alto) pero con una presión diastólica y frecuencia cardíaca notablemente bajas (PC2 muy bajo). Esta gran diferencia entre la presión sistólica y la diastólica (pulso amplio) es un indicador clásico de rigidez arterial.
+
+
+    """)
 
 # ============ TAB 3: Modelado (sobre PCs) ============
 with tab3:
@@ -352,6 +452,17 @@ with tab4:
             ax.set_xlabel("Predicho"); ax.set_ylabel("Real")
             st.pyplot(fig)
 
+
+    st.markdown("""
+
+La conclusión más importante es que los fenotipos hemodinámicos que se identifificaron mediante clustering en el espacio PCA están bien definidos y son muy fáciles de separar. Un rendimiento de 99.8% es prácticamente perfecto e indica que los grupos no se solapan entre sí.
+
+El rendimiento es alto, porque la combinación de PCA + Clustering fue muy efectiva. El PCA transformó los datos de manera que las diferencias entre los grupos de pacientes se maximizaron, y el K-Means pudo trazar fronteras muy claras entre ellos. En esencia, se creó un problema de clasificación "ideal", donde cada fenotipo ocupa su propio espacio distintivo, como se veía en el gráfico de dispersión.
+
+Análisis del Ranking de Modelos El modelo más simple, LogisticRegression, ha superado a todos los demás, incluidos los más complejos como RandomForest o GradientBoosting. Esto es un hallazgo muy significativo: Significa que los grupos son Linealmente Separables: La razón por la que un modelo lineal simple funciona tan bien es que las fronteras entre los fenotipos en el espacio PCA son, en su mayoría, líneas rectas (o planos). No se necesitan modelos complejos para aprender a diferenciarlos.
+
+    """)
+
 # ============ TAB 5: Conclusiones ============
 with tab5:
     st.subheader("🏆 Conclusiones")
@@ -367,12 +478,15 @@ with tab5:
 **Implicaciones**
 
 - Soporta **estratificación de riesgo** y diseño de **rutas de manejo** por fenotipo.
+
 - Permite **monitoreo longitudinal** y priorización de variables hemodinámicas clave.
 
 **Limitaciones & próximos pasos**
 
 - Validación en cohortes externas y **validación temporal** con series longitudinales.
+
 - Analizar **estabilidad del número de clusters** (silhouette, gap statistic) y robustez del mapeo si cambian signos/escala.
 - Añadir **explicabilidad** (SHAP/permutación) para auditar decisiones sobre PCs.
+
 - Considerar un panel de **loadings** dinámico (ya incluido) y, si se dispone, visualizar **varianza explicada** por PC.
-""")
+    """)
